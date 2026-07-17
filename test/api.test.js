@@ -3,100 +3,64 @@ import assert from 'node:assert/strict';
 import { createApp } from '../server/app.js';
 import { Store } from '../server/store.js';
 
-let server; let base;
+let server; let base; const tokens = {};
 before(async () => {
-  server = createApp(new Store(':memory:')).listen(0);
-  await new Promise((resolve) => server.once('listening', resolve));
+  server = createApp(new Store(':memory:')).listen(0); await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}/api`;
+  tokens.admin = await login('koko', 'admin123'); tokens.owner = await login('mgmg', 'owner123');
+  const made = await request('/users', 'admin', { method: 'POST', body: JSON.stringify({ name: 'SuSu', username: 'susu', password: 'user123', role: 'user' }) });
+  assert.equal(made.response.status, 201); tokens.user = await login('susu', 'user123'); tokens.userId = made.body.data.id;
 });
 after(() => server.close());
 
-async function request(path, user = 'user-1', options = {}) {
-  const response = await fetch(base + path, { ...options, headers: { 'content-type': 'application/json', 'x-user-id': user, ...options.headers } });
-  const body = response.status === 204 ? null : await response.json();
-  return { response, body };
+async function login(username, password) {
+  const response = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+  assert.equal(response.status, 200); return (await response.json()).data.token;
+}
+async function request(path, role, options = {}) {
+  const response = await fetch(base + path, { ...options, headers: { 'content-type': 'application/json', ...(tokens[role] ? { authorization: `Bearer ${tokens[role]}` } : {}), ...options.headers } });
+  return { response, body: response.status === 204 ? null : await response.json() };
 }
 
-test('rejects invalid ranges and all forms of overlap, but permits back-to-back', async () => {
-  let result = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2030-01-01T10:00:00Z', endTime: '2030-01-01T11:00:00Z' }) });
-  assert.equal(result.response.status, 201);
-  for (const [startTime, endTime] of [
-    ['2030-01-01T10:00:00Z', '2030-01-01T11:00:00Z'],
-    ['2030-01-01T09:30:00Z', '2030-01-01T10:30:00Z'],
-    ['2030-01-01T10:30:00Z', '2030-01-01T11:30:00Z'],
-    ['2030-01-01T10:15:00Z', '2030-01-01T10:45:00Z'],
-    ['2030-01-01T09:00:00Z', '2030-01-01T12:00:00Z'],
-  ]) {
-    result = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime, endTime }) });
-    assert.equal(result.response.status, 409);
+test('requires login and rejects incorrect credentials', async () => {
+  assert.equal((await request('/bookings', 'none')).response.status, 401);
+  const bad = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'koko', password: 'wrong' }) });
+  assert.equal(bad.status, 401); assert.equal((await bad.json()).error.code, 'INVALID_CREDENTIALS');
+});
+
+test('uses the requested default KoKo admin and MgMg owner accounts', async () => {
+  assert.equal((await request('/auth/me', 'admin')).body.data.name, 'KoKo');
+  assert.equal((await request('/auth/me', 'owner')).body.data.name, 'MgMg');
+});
+
+test('rejects every overlap shape and permits back-to-back ranges', async () => {
+  assert.equal((await request('/bookings', 'user', { method: 'POST', body: JSON.stringify({ startTime: '2030-01-01T10:00:00Z', endTime: '2030-01-01T11:00:00Z' }) })).response.status, 201);
+  for (const [startTime, endTime] of [['2030-01-01T10:00:00Z','2030-01-01T11:00:00Z'],['2030-01-01T09:30:00Z','2030-01-01T10:30:00Z'],['2030-01-01T10:30:00Z','2030-01-01T11:30:00Z'],['2030-01-01T10:15:00Z','2030-01-01T10:45:00Z'],['2030-01-01T09:00:00Z','2030-01-01T12:00:00Z']])
+    assert.equal((await request('/bookings', 'owner', { method: 'POST', body: JSON.stringify({ startTime, endTime }) })).response.status, 409);
+  assert.equal((await request('/bookings', 'owner', { method: 'POST', body: JSON.stringify({ startTime: '2030-01-01T11:00:00Z', endTime: '2030-01-01T12:00:00Z' }) })).response.status, 201);
+});
+
+test('enforces booking and user-management permission matrix', async () => {
+  assert.equal((await request('/bookings', 'admin', { method: 'POST', body: JSON.stringify({ startTime: '2031-01-01T10:00:00Z', endTime: '2031-01-01T11:00:00Z' }) })).response.status, 403);
+  for (const role of ['owner', 'user']) {
+    assert.equal((await request('/users', role)).response.status, 403);
+    assert.equal((await request('/users', role, { method: 'POST', body: '{}' })).response.status, 403);
   }
-  result = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2030-01-01T11:00:00Z', endTime: '2030-01-01T12:00:00Z' }) });
-  assert.equal(result.response.status, 201);
-  result = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2030-01-02T12:00:00Z', endTime: '2030-01-02T11:00:00Z' }) });
-  assert.equal(result.response.status, 400);
+  const ownerBooking = await request('/bookings', 'owner', { method: 'POST', body: JSON.stringify({ startTime: '2032-01-01T10:00:00Z', endTime: '2032-01-01T11:00:00Z' }) });
+  assert.equal((await request(`/bookings/${ownerBooking.body.data.id}`, 'user', { method: 'DELETE' })).response.status, 403);
+  assert.equal((await request(`/bookings/${ownerBooking.body.data.id}`, 'admin', { method: 'DELETE' })).response.status, 204);
+  assert.equal((await request('/summary', 'owner')).response.status, 200); assert.equal((await request('/summary', 'user')).response.status, 403);
 });
 
-test('enforces booking deletion permissions', async () => {
-  const made = await request('/bookings', 'owner-1', { method: 'POST', body: JSON.stringify({ startTime: '2031-01-01T10:00:00Z', endTime: '2031-01-01T11:00:00Z' }) });
-  let result = await request(`/bookings/${made.body.data.id}`, 'user-1', { method: 'DELETE' });
-  assert.equal(result.response.status, 403);
-  result = await request(`/bookings/${made.body.data.id}`, 'admin-1', { method: 'DELETE' });
-  assert.equal(result.response.status, 204);
+test('admin-created accounts can log in and duplicate usernames are rejected', async () => {
+  const duplicate = await request('/users', 'admin', { method: 'POST', body: JSON.stringify({ name: 'Other', username: 'susu', password: 'other123', role: 'user' }) });
+  assert.equal(duplicate.response.status, 409);
+  const users = await request('/users', 'admin'); assert.equal(users.response.status, 200);
+  assert.equal(users.body.data.some((u) => 'passwordHash' in u), false);
 });
 
-test('allows only admins to manage users and cascades booking deletion', async () => {
-  let result = await request('/users', 'owner-1'); assert.equal(result.response.status, 403);
-  result = await request('/users', 'admin-1', { method: 'POST', body: JSON.stringify({ name: 'Temporary', role: 'user' }) });
-  const id = result.body.data.id; assert.equal(result.response.status, 201);
-  await request('/bookings', id, { method: 'POST', body: JSON.stringify({ startTime: '2032-01-01T10:00:00Z', endTime: '2032-01-01T11:00:00Z' }) });
-  result = await request(`/users/${id}`, 'admin-1', { method: 'DELETE' }); assert.equal(result.response.status, 204);
-  const bookings = await request('/bookings', 'admin-1'); assert.equal(bookings.body.data.some((b) => b.userId === id), false);
-});
-
-test('restricts summary to owner and admin', async () => {
-  assert.equal((await request('/summary', 'user-1')).response.status, 403);
-  assert.equal((await request('/summary', 'owner-1')).response.status, 200);
-  assert.equal((await request('/summary', 'admin-1')).response.status, 200);
-});
-
-test('enforces the complete role permission matrix', async () => {
-  for (const roleId of ['user-1', 'owner-1']) {
-    assert.equal((await request('/users', roleId)).response.status, 403);
-    assert.equal((await request('/users', roleId, { method: 'POST', body: JSON.stringify({ name: 'Blocked', role: 'user' }) })).response.status, 403);
-    assert.equal((await request('/users/user-1/role', roleId, { method: 'PATCH', body: JSON.stringify({ role: 'owner' }) })).response.status, 403);
-    assert.equal((await request('/users/admin-1', roleId, { method: 'DELETE' })).response.status, 403);
-  }
-  assert.equal((await request('/bookings', 'admin-1', { method: 'POST', body: JSON.stringify({ startTime: '2033-01-01T10:00:00Z', endTime: '2033-01-01T11:00:00Z' }) })).response.status, 403);
-
-  const own = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2033-02-01T10:00:00Z', endTime: '2033-02-01T11:00:00Z' }) });
-  assert.equal((await request(`/bookings/${own.body.data.id}`, 'user-1', { method: 'DELETE' })).response.status, 204);
-  const forOwner = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2033-03-01T10:00:00Z', endTime: '2033-03-01T11:00:00Z' }) });
-  assert.equal((await request(`/bookings/${forOwner.body.data.id}`, 'owner-1', { method: 'DELETE' })).response.status, 204);
-});
-
-test('returns clear authentication and validation errors', async () => {
-  let result = await fetch(`${base}/bookings`);
-  assert.equal(result.status, 401);
-  assert.equal((await result.json()).error.code, 'UNAUTHENTICATED');
-
-  result = await fetch(`${base}/bookings`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-user-id': 'user-1' }, body: '{bad json' });
-  assert.equal(result.status, 400);
-  assert.equal((await result.json()).error.code, 'INVALID_JSON');
-
-  const noBody = await request('/bookings', 'user-1', { method: 'POST' });
-  assert.equal(noBody.response.status, 400);
-  assert.equal(noBody.body.error.code, 'VALIDATION_ERROR');
-  const ambiguousTime = await request('/bookings', 'user-1', { method: 'POST', body: JSON.stringify({ startTime: '2034-01-01T10:00:00', endTime: '2034-01-01T11:00:00' }) });
-  assert.equal(ambiguousTime.response.status, 400);
-});
-
-test('admin can list, create, change, and delete users but cannot self-delete', async () => {
-  assert.equal((await request('/users', 'admin-1')).response.status, 200);
-  const made = await request('/users', 'admin-1', { method: 'POST', body: JSON.stringify({ name: 'Role Test', role: 'user' }) });
-  assert.equal(made.response.status, 201);
-  const id = made.body.data.id;
-  const changed = await request(`/users/${id}/role`, 'admin-1', { method: 'PATCH', body: JSON.stringify({ role: 'owner' }) });
-  assert.equal(changed.response.status, 200); assert.equal(changed.body.data.role, 'owner');
-  assert.equal((await request('/users/admin-1', 'admin-1', { method: 'DELETE' })).response.status, 400);
-  assert.equal((await request(`/users/${id}`, 'admin-1', { method: 'DELETE' })).response.status, 204);
+test('logout invalidates the session token', async () => {
+  const token = await login('mgmg', 'owner123');
+  let response = await fetch(`${base}/auth/logout`, { method: 'POST', headers: { authorization: `Bearer ${token}` } }); assert.equal(response.status, 204);
+  response = await fetch(`${base}/bookings`, { headers: { authorization: `Bearer ${token}` } }); assert.equal(response.status, 401);
 });

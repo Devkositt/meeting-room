@@ -24,11 +24,12 @@ Open `http://localhost:3000`.
 
 ## Demo authentication
 
-Use the user selector in the header. The browser sends the selected user's ID in the `x-user-id` header. This is intentionally simple for the assessment; every authorization decision is still enforced by the API. Three demo accounts are created on first run:
+The app opens on a login screen. Passwords are hashed with Node's `scrypt`, and a successful login returns a random Bearer session token. Two accounts are created on first run:
 
-- Alice Admin (`admin`)
-- Oscar Owner (`owner`)
-- Uma User (`user`)
+- KoKo — username `koko`, password `admin123`, role `admin`
+- MgMg — username `mgmg`, password `owner123`, role `owner`
+
+KoKo can create additional accounts from **Users**. Usernames must be unique and passwords must contain at least six characters. Sessions are intentionally in memory for this assessment, so users sign in again after a server restart.
 
 ## Time and overlap rules
 
@@ -44,12 +45,14 @@ Deleting a user also deletes every booking created by that user. The JSON data s
 
 ## API
 
-All protected routes require `x-user-id: <id>`.
+All protected routes require `Authorization: Bearer <session-token>`.
 
 | Method | Route | Access |
 |---|---|---|
 | GET | `/api/health` | Public |
-| GET | `/api/session/users` | Public, for demo login |
+| POST | `/api/auth/login` | Public |
+| GET | `/api/auth/me` | Signed-in user |
+| POST | `/api/auth/logout` | Signed-in user |
 | GET | `/api/bookings` | All roles |
 | POST | `/api/bookings` | User/owner |
 | DELETE | `/api/bookings/:id` | Own booking for user; any for owner/admin |

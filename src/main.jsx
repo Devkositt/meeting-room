@@ -2,79 +2,45 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const dtLocal = (date) => {
-  const d = new Date(date); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
-};
+const localInput = (time) => { const d = new Date(time); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+const initialTimes = () => ({ startTime: localInput(Date.now() + 3600000), endTime: localInput(Date.now() + 7200000) });
 
 function App() {
-  const [users, setUsers] = useState([]); const [userId, setUserId] = useState(localStorage.userId || '');
-  const [bookings, setBookings] = useState([]); const [summary, setSummary] = useState([]);
+  const [token, setToken] = useState(localStorage.token || ''); const [current, setCurrent] = useState(null);
+  const [login, setLogin] = useState({ username: '', password: '' }); const [tab, setTab] = useState('bookings');
+  const [bookings, setBookings] = useState([]); const [users, setUsers] = useState([]); const [summary, setSummary] = useState([]);
+  const [times, setTimes] = useState(initialTimes); const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'user' });
   const [notice, setNotice] = useState(null); const [busy, setBusy] = useState(false);
-  const [times, setTimes] = useState({ startTime: dtLocal(Date.now() + 3600000), endTime: dtLocal(Date.now() + 7200000) });
-  const [newUser, setNewUser] = useState({ name: '', role: 'user' });
-  const current = users.find((u) => u.id === userId);
-  const names = useMemo(() => Object.fromEntries(users.map((u) => [u.id, u.name])), [users]);
 
-  async function api(url, options = {}, auth = true) {
-    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(auth && userId ? { 'x-user-id': userId } : {}), ...options.headers } });
+  async function api(url, options = {}, authToken = token) {
+    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}), ...options.headers } });
     if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error?.message || `Request failed (${response.status})`); }
     return response.status === 204 ? null : response.json();
   }
-  async function loadUsers(selected = userId) {
-    const body = await api('/api/session/users', {}, false); setUsers(body.data);
-    if (!selected || !body.data.some((u) => u.id === selected)) {
-      const next = body.data[0]?.id || ''; setUserId(next); localStorage.userId = next;
-    }
+  async function refresh(user = current, authToken = token) {
+    if (!user) return; setBookings((await api('/api/bookings', {}, authToken)).data);
+    if (user.role !== 'user') setSummary((await api('/api/summary', {}, authToken)).data); else setSummary([]);
+    if (user.role === 'admin') setUsers((await api('/api/users', {}, authToken)).data); else setUsers([]);
   }
-  async function refresh() {
-    if (!userId) return;
-    try { const body = await api('/api/bookings'); setBookings(body.data);
-      if (current && current.role !== 'user') setSummary((await api('/api/summary')).data); else setSummary([]);
-    } catch (e) { setNotice({ type: 'error', text: e.message }); }
+  useEffect(() => { if (!token) return; api('/api/auth/me').then(({ data }) => { setCurrent(data); refresh(data); }).catch(() => signOut(false)); }, []);
+  async function signIn(e) {
+    e.preventDefault(); setBusy(true); setNotice(null);
+    try { const { data } = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(login) }, ''); localStorage.token = data.token; setToken(data.token); setCurrent(data.user); await refresh(data.user, data.token); }
+    catch (error) { setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); }
   }
-  useEffect(() => { loadUsers(); }, []);
-  useEffect(() => { refresh(); }, [userId, current?.role]);
+  async function signOut(callApi = true) { if (callApi) await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); localStorage.removeItem('token'); setToken(''); setCurrent(null); setLogin({ username: '', password: '' }); }
+  async function action(fn, message) { setBusy(true); setNotice(null); try { await fn(); await refresh(); setNotice({ type: 'success', text: message }); } catch (error) { setNotice({ type: 'error', text: error.message }); } finally { setBusy(false); } }
+  const names = useMemo(() => Object.fromEntries((users.length ? users : summary.map((x) => x.user)).map((u) => [u.id, u.name])), [users, summary]);
+  const next = bookings.find((b) => new Date(b.endTime) > new Date());
 
-  async function action(fn, success) {
-    setBusy(true); setNotice(null);
-    try { await fn(); setNotice({ type: 'success', text: success }); await loadUsers(userId); await refresh(); }
-    catch (e) { setNotice({ type: 'error', text: e.message }); } finally { setBusy(false); }
-  }
-  const selectUser = (id) => { setUserId(id); localStorage.userId = id; setNotice(null); };
-  const canDelete = (b) => current?.role !== 'user' || b.userId === current.id;
+  if (!current) return <div className="login-page"><section className="login-visual"><div className="brand"><i>MR</i><span>MeetRoom</span></div><div><p className="kicker">SPACE TO THINK</p><h1>Meet better.<br/>Decide faster.</h1><p>One room. Zero scheduling conflicts. A focused space for the conversations that move work forward.</p></div><div className="visual-card"><span className="live-dot"/> Room availability updates instantly</div></section><section className="login-panel"><form onSubmit={signIn}><p className="kicker">WELCOME BACK</p><h2>Sign in to your workspace</h2><p className="muted">Enter the account created by your administrator.</p>{notice && <div className="alert error">{notice.text}</div>}<label>Username<input autoFocus required autoComplete="username" value={login.username} onChange={(e) => setLogin({ ...login, username: e.target.value })} placeholder="Enter username"/></label><label>Password<input required type="password" autoComplete="current-password" value={login.password} onChange={(e) => setLogin({ ...login, password: e.target.value })} placeholder="Enter password"/></label><button className="btn primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'} <span>→</span></button><div className="demo"><strong>Demo accounts</strong><button type="button" onClick={() => setLogin({ username: 'koko', password: 'admin123' })}>KoKo · Admin</button><button type="button" onClick={() => setLogin({ username: 'mgmg', password: 'owner123' })}>MgMg · Owner</button></div></form></section></div>;
 
-  if (!current) return <main className="shell"><p>Loading application…</p></main>;
-  return <>
-    <header><div><span className="eyebrow">SINGLE ROOM</span><h1>Meeting Room Booking</h1></div>
-      <label className="identity">Signed in as<select value={userId} onChange={(e) => selectUser(e.target.value)}>{users.map((u) => <option key={u.id} value={u.id}>{u.name} — {u.role}</option>)}</select></label>
-    </header>
-    <main className="shell">
-      <div className="roleline">Current role <strong className={`pill ${current.role}`}>{current.role}</strong><span>Times are shown in your local timezone and stored in UTC.</span></div>
-      {notice && <div role="alert" className={`notice ${notice.type}`}>{notice.text}<button onClick={() => setNotice(null)}>×</button></div>}
-      <div className="grid">
-        {current.role !== 'admin' && <section className="card booking-form"><div className="section-title"><span>New booking</span><small>Back-to-back slots are allowed</small></div>
-          <form onSubmit={(e) => { e.preventDefault(); action(() => api('/api/bookings', { method: 'POST', body: JSON.stringify({ startTime: new Date(times.startTime).toISOString(), endTime: new Date(times.endTime).toISOString() }) }), 'Booking created.'); }}>
-            <label>Starts<input type="datetime-local" required value={times.startTime} onChange={(e) => setTimes({ ...times, startTime: e.target.value })}/></label>
-            <label>Ends<input type="datetime-local" required value={times.endTime} onChange={(e) => setTimes({ ...times, endTime: e.target.value })}/></label>
-            <button className="primary" disabled={busy}>Book the room</button>
-          </form>
-        </section>}
-        <section className="card bookings"><div className="section-title"><span>Upcoming bookings</span><small>{bookings.length} total</small></div>
-          {bookings.length === 0 ? <div className="empty">The room is wide open. Create the first booking.</div> : <div className="booking-list">{bookings.map((b) => <article key={b.id}>
-            <div className="datebox"><strong>{new Date(b.startTime).toLocaleDateString([], { day: '2-digit' })}</strong><span>{new Date(b.startTime).toLocaleDateString([], { month: 'short' })}</span></div>
-            <div className="booking-info"><strong>{new Date(b.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(b.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong><span>Booked by {names[b.userId] || 'Deleted user'}</span></div>
-            {canDelete(b) && <button className="danger ghost" disabled={busy} onClick={() => action(() => api(`/api/bookings/${b.id}`, { method: 'DELETE' }), 'Booking deleted.')}>Delete</button>}
-          </article>)}</div>}
-        </section>
-      </div>
-      {current.role !== 'user' && <section className="card summary"><div className="section-title"><span>Bookings grouped by user</span><small>Owner & admin view</small></div><div className="stats">{summary.map((row) => <div key={row.user.id}><strong>{row.totalBookings}</strong><span>{row.user.name}</span><small>{row.user.role}</small>{row.bookings.length > 0 && <ul>{row.bookings.map((booking) => <li key={booking.id}>{new Date(booking.startTime).toLocaleString()} – {new Date(booking.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</li>)}</ul>}</div>)}</div></section>}
-      {current.role === 'admin' && <section className="card admin"><div className="section-title"><span>User management</span><small>Deleting a user also deletes their bookings</small></div>
-        <form onSubmit={(e) => { e.preventDefault(); action(() => api('/api/users', { method: 'POST', body: JSON.stringify(newUser) }), 'User created.'); setNewUser({ name: '', role: 'user' }); }}><input aria-label="New user name" placeholder="New user's name" required value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}/><select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option>user</option><option>owner</option><option>admin</option></select><button className="primary" disabled={busy}>Add user</button></form>
-        <div className="user-list">{users.map((u) => <div key={u.id}><span><strong>{u.name}</strong><small>{u.id}</small></span><select aria-label={`Role for ${u.name}`} value={u.role} disabled={busy} onChange={(e) => action(() => api(`/api/users/${u.id}/role`, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) }), 'Role updated.')}>{['user','owner','admin'].map((r) => <option key={r}>{r}</option>)}</select><button className="danger ghost" disabled={busy || u.id === current.id} onClick={() => action(() => api(`/api/users/${u.id}`, { method: 'DELETE' }), 'User and their bookings deleted.')}>Delete</button></div>)}</div>
-      </section>}
-    </main>
-  </>;
+  return <div className="app"><aside><div className="brand"><i>MR</i><span>MeetRoom</span></div><nav><button className={tab === 'bookings' ? 'active' : ''} onClick={() => setTab('bookings')}>◫ <span>Bookings</span></button>{current.role !== 'user' && <button className={tab === 'insights' ? 'active' : ''} onClick={() => setTab('insights')}>⌁ <span>Insights</span></button>}{current.role === 'admin' && <button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>♙ <span>Users</span></button>}</nav><div className="profile"><div className="avatar">{current.name.slice(0, 2).toUpperCase()}</div><div><strong>{current.name}</strong><span>{current.role}</span></div><button title="Sign out" onClick={() => signOut()}>↪</button></div></aside>
+    <main><header><div><p className="kicker">MEETING ROOM</p><h1>{tab === 'bookings' ? 'Room schedule' : tab === 'insights' ? 'Usage insights' : 'Team access'}</h1></div><div className="availability"><span className="live-dot"/><div><strong>{next && new Date(next.startTime) <= new Date() ? 'In use now' : 'Room available'}</strong><small>{next ? `Next: ${new Date(next.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'No upcoming bookings'}</small></div></div></header>
+      {notice && <div className={`alert ${notice.type}`}>{notice.text}<button onClick={() => setNotice(null)}>×</button></div>}
+      {tab === 'bookings' && <div className="dashboard"><section className="panel schedule"><div className="panel-head"><div><h2>Upcoming bookings</h2><p>All times shown in your local timezone</p></div><span className="count">{bookings.length}</span></div>{bookings.length ? <div className="booking-list">{bookings.map((b) => <article key={b.id}><div className="date"><strong>{new Date(b.startTime).getDate()}</strong><span>{new Date(b.startTime).toLocaleDateString([], { month: 'short' })}</span></div><div className="line"/><div className="booking-copy"><strong>{new Date(b.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — {new Date(b.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong><span>{names[b.userId] || (b.userId === current.id ? current.name : 'Team member')}</span></div>{(current.role !== 'user' || b.userId === current.id) && <button className="icon-btn" onClick={() => action(() => api(`/api/bookings/${b.id}`, { method: 'DELETE' }), 'Booking removed.')} disabled={busy}>×</button>}</article>)}</div> : <div className="empty"><b>✓</b><h3>The room is wide open</h3><p>Create the first booking for your team.</p></div>}</section>{current.role !== 'admin' && <section className="panel create"><p className="kicker">NEW BOOKING</p><h2>Reserve the room</h2><p>Back-to-back time slots are welcome.</p><form onSubmit={(e) => { e.preventDefault(); action(() => api('/api/bookings', { method: 'POST', body: JSON.stringify({ startTime: new Date(times.startTime).toISOString(), endTime: new Date(times.endTime).toISOString() }) }), 'Your room is booked.'); }}><label>Start time<input type="datetime-local" required value={times.startTime} onChange={(e) => setTimes({ ...times, startTime: e.target.value })}/></label><label>End time<input type="datetime-local" required value={times.endTime} onChange={(e) => setTimes({ ...times, endTime: e.target.value })}/></label><button className="btn primary" disabled={busy}>Reserve room <span>→</span></button></form></section>}</div>}
+      {tab === 'insights' && <section className="panel"><div className="panel-head"><div><h2>Bookings by team member</h2><p>A simple view of room usage</p></div></div><div className="insight-grid">{summary.map((row) => <article key={row.user.id}><div className="avatar">{row.user.name.slice(0, 2).toUpperCase()}</div><div><strong>{row.user.name}</strong><span>{row.user.role}</span></div><b>{row.totalBookings}</b><small>bookings</small></article>)}</div></section>}
+      {tab === 'users' && <div className="users-layout"><section className="panel create-user"><p className="kicker">ADD TEAM MEMBER</p><h2>Create an account</h2><form onSubmit={(e) => { e.preventDefault(); action(() => api('/api/users', { method: 'POST', body: JSON.stringify(newUser) }), 'Account created.'); setNewUser({ name: '', username: '', password: '', role: 'user' }); }}><label>Full name<input required value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} placeholder="e.g. Su Su"/></label><label>Username<input required value={newUser.username} onChange={(e) => setNewUser({ ...newUser, username: e.target.value })} placeholder="e.g. susu"/></label><label>Temporary password<input required minLength="6" type="password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} placeholder="At least 6 characters"/></label><label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}><option value="user">User</option><option value="owner">Owner</option><option value="admin">Admin</option></select></label><button className="btn primary" disabled={busy}>Create account <span>＋</span></button></form></section><section className="panel team"><div className="panel-head"><div><h2>Team members</h2><p>{users.length} active accounts</p></div></div>{users.map((u) => <article key={u.id}><div className="avatar">{u.name.slice(0, 2).toUpperCase()}</div><div><strong>{u.name}</strong><span>@{u.username}</span></div><select value={u.role} disabled={busy || u.id === current.id} onChange={(e) => action(() => api(`/api/users/${u.id}/role`, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) }), 'Role updated.')}>{['user','owner','admin'].map((r) => <option key={r}>{r}</option>)}</select><button className="icon-btn" disabled={busy || u.id === current.id} onClick={() => action(() => api(`/api/users/${u.id}`, { method: 'DELETE' }), 'Account and bookings deleted.')}>×</button></article>)}</section></div>}
+    </main></div>;
 }
-
 createRoot(document.getElementById('root')).render(<App />);
