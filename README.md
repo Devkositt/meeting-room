@@ -77,6 +77,15 @@ Tests cover invalid ranges, identical/partial/contained/containing overlaps, bac
 
 The free Render filesystem is ephemeral, so demo data may reset when an instance is replaced or redeployed. For a production system, replace the small file store with PostgreSQL and real session/JWT authentication. This limitation does not affect local persistence or assessment of the requested behavior.
 
+## Deploy to Railway
+
+1. Push this repository to GitHub and connect it as a Railway service.
+2. Leave the install command on automatic. Railpack runs `npm ci` during its install phase.
+3. `railway.json` sets the build command to `npm run build` and the start command to `npm start`.
+4. Generate a public domain under **Settings > Networking**.
+
+Do not set the Railway Build Command to `npm ci && npm run build`: that repeats the automatic install and can cause a locked `node_modules/.vite` directory. If a dashboard override already contains that command, remove the override or change it to `npm run build`. Repository configuration takes precedence once the updated commit is deployed.
+
 ## Project structure
 
 ```text
