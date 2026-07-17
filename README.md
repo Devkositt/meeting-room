@@ -297,37 +297,6 @@ Build flow:
 
 Do not commit `dist/`, `node_modules/`, `.env`, or runtime data files.
 
-## 13. Railway deployment
-
-1. Push the repository to GitHub.
-2. Create a Railway project and choose **Deploy from GitHub Repo**.
-3. Select this repository.
-4. Leave dependency installation automatic. Railpack runs `npm ci` during its install phase.
-5. Repository file `railway.json` sets:
-   - Builder: `RAILPACK`
-   - Build command: `npm run build`
-   - Start command: `npm start`
-   - Health endpoint: `/api/health`
-6. Under **Settings → Networking**, generate a public domain.
-7. Open the generated domain and sign in with a demo account.
-
-Do not set the Railway Build Command to `npm ci && npm run build`. That repeats the automatic installation and may cause `EBUSY: resource busy or locked, rmdir '/app/node_modules/.vite'`. If a dashboard override exists, remove it or set it to only:
-
-```text
-npm run build
-```
-
-## 14. Render deployment
-
-1. Push the repository to GitHub.
-2. In Render, select **New → Blueprint**.
-3. Connect the repository.
-4. Render reads `render.yaml` and runs the configured build/start commands.
-5. The health check uses `/api/health`.
-
-
-# မြန်မာဘာသာ Documentation
-
 ## ၁။ Project အကြောင်း
 
 ဒီ project က meeting room တစ်ခန်းတည်းအတွက် booking အချိန်တွေ စီမံနိုင်တဲ့ Full Stack Web Application ဖြစ်ပါတယ်။ Login စနစ်၊ Admin/Owner/User role permissions၊ booking overlap စစ်ဆေးခြင်း၊ user management၊ usage summary၊ responsive UI၊ API tests နဲ့ deployment configuration တွေ ပါဝင်ပါတယ်။
@@ -474,18 +443,3 @@ Build အဆင့်ဆင့်က—
 3. `npm start` က Node/Express server ကိုစပါတယ်။
 4. Express က `/api/*` ကို Backend API အဖြစ် serve လုပ်ပြီး ကျန်တဲ့ routes တွေကို `dist/` ထဲက React frontend အဖြစ် serve လုပ်ပါတယ်။
 5. `PORT` မသတ်မှတ်ထားရင် `http://localhost:3000` မှာ အသုံးပြုနိုင်ပါတယ်။
-
-## ၁၁။ Railway Deploy လုပ်နည်း
-
-1. Code ကို GitHub repository ဆီ push လုပ်ပါ။
-2. Railway မှာ project အသစ်ဖန်တီးပြီး **Deploy from GitHub Repo** ကိုရွေးပါ။
-3. ဒီ repository ကိုရွေးပါ။
-4. Install command ကို automatic အတိုင်းထားပါ။ Railway Railpack က `npm ci` ကို install phase မှာလုပ်ပေးပါတယ်။
-5. `railway.json` က `npm run build`, `npm start` နဲ့ `/api/health` ကိုသတ်မှတ်ပေးထားပါတယ်။
-6. **Settings → Networking** မှာ public domain ထုတ်ပါ။
-
-Railway Build Command မှာ `npm ci && npm run build` မထည့်ပါနဲ့။ `npm ci` နှစ်ကြိမ် run ပြီး `/app/node_modules/.vite` lock ဖြစ်နိုင်ပါတယ်။ Custom Build Command ထည့်ထားရင် အောက်က command တစ်ခုပဲထားပါ—
-
-```text
-npm run build
-```
